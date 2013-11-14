@@ -11,13 +11,13 @@ path = "C:\\TaxIPP-Life\\SimIPP\\"
 # Partie 1 :définition des étapes et fonctions :
 class Pension(object):
     def __init__(self):
-            self.simul2 = None
+            self.simul = None
+            self.survie = None
             self.survieF = None
             self.survieH = None
             self.beta = 0.97
             self.kappa = 1.25
             self.gamma = 0.6
-            
             
     def load(self): 
         simul = pd.read_csv(path + 'simul.csv', sep=',')                      
@@ -69,9 +69,10 @@ class Pension(object):
         self.survieH = _index_survie(survieH)
         self.survieF = _index_survie(survieF)
         
-    def pension_ini(self):
+    def calculate_pond_time(self):
+        ''' Associe les vecteurs de pondérations'''
         simul =  self.simul #[self.simul['id']==3]
-        print "Nombre de ligne dans la base : "  + str(len(simul))
+        print "Nombre de lignes dans la base : "  + str(len(simul))
         survie = self.survieH 
         survieF = self.survieF
         beta = self.beta
@@ -96,7 +97,7 @@ class Pension(object):
                     to_drop = to_drop | (info[var].shift(1) != info[var])
             info['groupe'] = (to_drop).astype(int).cumsum() - 1
             info['groupe'] = info['groupe'].astype(int)
-
+            
             # Pour le calcul par groupe
             group_calcul = info.drop_duplicates(['groupe'])
             group_calcul.index = range(0, len(group_calcul))
@@ -104,10 +105,9 @@ class Pension(object):
             
             # Attribution de son numéro de groupe à chaque individu
             info = info[['id', 'groupe']]
-            self.info = info
             #info.to_csv('infogr.csv')
-            simul = merge(simul, info, on = 'id')
-            return group_calcul, simul 
+            #simul = merge(simul, info, on = 'id')
+            return group_calcul, info
 
             
         def _pond_vie(ti, ageti,  tf):
@@ -144,12 +144,11 @@ class Pension(object):
             return esp
         
         # Appel des fonctions
-        info_gr, simul = _info_ind(ident,simul)
-        
+        info_gr, info = _info_ind(ident,simul)
         esp = _pond_to_groupe(info_gr)
-        #esp.to_csv('testesp.csv')
-        simul = merge(simul, esp, on= ['groupe', 'time'])
-        self.simul = simul
+        #simul = merge(simul, esp, on= ['groupe', 'time'])
+        self.esp = esp
+        self.info = info
 
     def pension_calcul(self):
         gamma = self.gamma
@@ -159,24 +158,24 @@ class Pension(object):
             ''' Cette fonction retourne une liste de vecteurs de revenus
             correpondant aux différents horizons de retraite (prend sa retraite en t=r)'''
             nb_period = len(simul)
-            simul.index = range(nb_period)
-            income = [np.array([(kappa * simul.loc[0,'pension'])**gamma]*(nb_period))]
+            simul = np.array(simul[['salaire', 'pension']])
+            # remarque : passage sous numpy pour faciliter le calcul + réindexation à partir de zéro
+            # correspondances :  (salaire,0 ); (pension, 1); 
+            income = [[(kappa * simul[0,1])**gamma]*(nb_period)]
             for r in range(1,nb_period ):
                 # Vecteur des revenus
-                sal = simul.loc[:r-1, 'salaire']
-                pens = [kappa * simul.loc[r,'pension']] * (nb_period - r)
+                sal = simul[:r,0]
+                pens = kappa * simul[r,1]*np.ones(nb_period - r)
                 income_r = np.concatenate([sal, pens])** gamma
-                # Listes contenant les vecteurs de revenus lors de départ à la retaite en r
+                # Listes contenant les vecteurs de revenus lors d'un départ à la retaite en r
                 income += [income_r]
             income = np.concatenate([income])
             income = income.transpose()
-            income = pd.DataFrame(income)
-            #income.to_csv('income.csv')
             return income
             
-        def _calcul_cout_opt(income, simul):
+        def _calcul_cout_opt(income, esp, ident_groupe):
             ''' Cette fonction renvoie le vecteur des Vt(r*) - Vt(t)'''
-            esp = simul.loc[:,1 :len(simul)]
+            esp = np.array(esp.loc[esp['groupe']== ident_groupe, 1: len(income)])
             vec = np.dot(esp, income)
             # Cette matrice diagonale contient toutes les valeurs Vt(r) 
             # indice de ligne : t, indice de colonne : r 
@@ -184,44 +183,41 @@ class Pension(object):
             # On sauvegarde les valeurs Vt(t) qui apparaissent sur le diagonale
             V_tt = np.diag(vec)
             vec_max = np.amax(vec, axis=1) -  V_tt
-            vec = pd.DataFrame(vec_max)
-            #vec.to_csv('testvec.csv')
+            # vec = pd.DataFrame(vec_max)
+            # vec.to_csv('testvec.csv')
             return vec_max
        
-        def _last_calculate(simul) :
+        def _last_calculate(simul, info, esp) :
            simul = simul.sort(['id','time'])
-           list_id = simul['id'].drop_duplicates()
+           list_id = info['id']
            for i in list_id:
                 group = simul.loc[simul['id']==i,:]
+                ident_group = int(info.loc[info['id']==i, 'groupe'])
                 income = _income_vectors(group)
-                vec_i = _calcul_cout_opt(income, group)
-                #vec = vec + [vec_i]
+                vec_i = _calcul_cout_opt(income, esp, ident_group)
                 simul.loc[simul['id']==i, 'OVt'] = vec_i
-           simul = simul.drop(range(1,60), axis = 1)
            return simul
                 
         # Appelle des fonctions et calcul final
         simul = self.simul
+        esp = self.esp
+        info = self.info
         simul['OVt'] = -1
-        simul = _last_calculate(simul)
+        simul = _last_calculate(simul,info,esp)
         simul.to_csv('testdusimul.csv')
         
-        '''
-        simul = simul.sort(['id','time'])
-        for group in simul.groupby('id') : 
-            grouptest = np.array(group)
-            
-            income = map(_income_vectors,group)
-            vec = _calcul_Vtr_opt(income, group)
-            simul['OVt'] = vec
-       '''
-
 # Partie 2 : Appelle du code
 import time
 start_t = time.time()
 data = Pension()
 data.load()  
 data.format()
-data.pension_ini()
+int_time = time.time()
+print "Importation terminée"
+data.calculate_pond_time()
+print "Calculs préliminaires terminés"
 data.pension_calcul()
-print "Voilà, c'est fini! Temps de calcul : " + str(time.time() - start_t)  + "s"  
+print "Voilà, c'est fini! Temps de calcul : " + str(time.time() - start_t)  + "s dont " + str(int_time - start_t)  + "s d'importation"
+#import cProfile
+#command = """data.calculate_pond_time()"""
+#cProfile.runctx( command, globals(), locals(), filename="OpenGLContext.profile" )
