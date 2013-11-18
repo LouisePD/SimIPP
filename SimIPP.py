@@ -125,15 +125,15 @@ class Pension(object):
             #esp.to_csv('testesp.csv')
             return esp
         
-        def _pond_to_groupe(info, long_esp):
+        def _pond_to_groupe(info_gr, long_esp):
             ''' Attribue les vecteurs de pondérations à chacun des groupes (ident_groupe dans 1er colonne)
             renvoie une matrice (23485,138) : 1 ligne par groupe et par date'''
-            nb_groupe = len(info)
+            nb_groupe = len(info_gr)
             esp = np.zeros((long_esp,138))
             index_ini = 0
             for i in range(nb_groupe): 
                 # Caractéristiques du groupes
-                ti, tf, agei =  info.loc[i,['date_min','date_max' ,'agem_min']]
+                ti, tf, agei =  info_gr.loc[i,['date_min','date_max' ,'agem_min']]
                 esp_i = _pond_vie(ti,agei, tf)
                 dur_group = esp_i.shape[1] # = (tf - ti + 1) 
                 esp[index_ini : index_ini + dur_group, 0] = i
@@ -153,17 +153,17 @@ class Pension(object):
         gamma = self.gamma
         kappa = self.kappa
     
-        def _income_vectors(simul):
+        def _income_vectors(data):
             ''' Cette fonction retourne une matrice dont les colonnes sont les vecteurs de revenus
             correpondant aux différents horizons de retraite (prend sa retraite en t=r)'''
-            nb_period = len(simul)
+            nb_period = len(data)
             # Rq : passage sous numpy pour faciliter le calcul + réindexation à partir de zéro
             # correspondances :  (salaire,0 ); (pension, 1); 
             income = np.zeros((nb_period,nb_period))
             for r in range(0,nb_period ):
                 # Vecteur des revenus
-                income[r,:r] = simul[:r,0]
-                income[r,r:] = kappa*simul[r,1]
+                income[r,:r] = data[:r,0]
+                income[r,r:] = kappa*data[r,1]
             income = income**gamma
             income = income.transpose()
             #income = pd.DataFrame(income)
@@ -194,8 +194,8 @@ class Pension(object):
             for ident_group, indivs in info.groupby('groupe'):
                 esp_group = esp[esp[:,0] == ident_group,:]
                 for i in indivs['id']:
-                    group = simul[simul[:,2]==i,:]
-                    income = _income_vectors(group)
+                    perso = simul[simul[:,2]==i,:]
+                    income = _income_vectors(perso)
                     vect = _calcul_cout_opt(income, esp_group)
                     result.loc[i,0:len(vect)-1] = vect
             return result
